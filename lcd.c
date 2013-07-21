@@ -18,6 +18,7 @@ static void __iomem *red_out_base = NULL;
 #define RED_BIT (1<<12)
 
 
+#if 0
 static void set_red(int red)
 {
 	unsigned short val = ioread16(red_out_base);
@@ -36,10 +37,12 @@ static void set_red(int red)
 		val &= ~RED_BIT;
 	iowrite16(red_out_base, val);
 }
+#endif
 
 int lcd_init(void)
 {
 	int ret = 0;
+	unsigned int val;
 
 	// dbg start up msg
 	printk(KERN_INFO "LCD POC driver started\n");
@@ -54,19 +57,24 @@ int lcd_init(void)
 		goto out1;
 	}
 
-	printk(KERN_INFO "ioport_map red output region\n");
-	red_out_base = ioport_map(RED_OUT_BASE, 2);
+	printk(KERN_INFO "ioremap red output region\n");
+	red_out_base = ioremap_nocache(RED_OUT_BASE, 2);
 	if (!red_out_base)
 	{
-		printk(KERN_ERR "%s: requested I/O region (%#x:2) is "
+		printk(KERN_ERR "%s: map I/O region (%#x:2) is "
 			   "in use\n", "lcd, RED_OUT_BASE", RED_OUT_BASE);
 		ret = -EIO;
 		goto out2;
 	}
+	printk(KERN_INFO "ioremap red output region from 0x%.8x to 0x%.8x\n", RED_OUT_BASE, (int)red_out_base);
 	
 	// just set the some output for now
-	printk(KERN_INFO "calling set red\n");
-	set_red(1);
+	printk(KERN_INFO "calling read16 red\n");
+	val = ioread16(red_out_base);
+	printk(KERN_INFO "I read 0x%x back\n", val);
+	//set_red(1);
+	val |= RED_BIT;
+	iowrite16(val, red_out_base);
 
 	return 0;
 
@@ -85,7 +93,7 @@ void lcd_cleanup(void)
 {
 	// clear the e pin so we can retest
 	printk(KERN_INFO "calling clear red\n");
-	set_red(0);
+	//set_red(0);
 	
 	// clear resources
 	printk(KERN_INFO "freeing resources\n");
