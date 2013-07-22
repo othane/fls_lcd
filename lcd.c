@@ -18,26 +18,24 @@ static void __iomem *red_out_base = NULL;
 #define RED_BIT (1<<12)
 
 
-#if 0
-static void set_red(int red)
+static void set_red(int state)
 {
 	unsigned short val = ioread16(red_out_base);
 	
 	printk(KERN_INFO "set red\n");
 
 	if (val & RED_BIT)
-		printk(KERN_INFO "red led if off\n");
+		printk(KERN_INFO "red led is on\n");
 	else
-		printk(KERN_INFO "red led if on\n");
+		printk(KERN_INFO "red led is off\n");
 
 	// set red on
-	if (red)
+	if (state)
 		val |= RED_BIT;
 	else
 		val &= ~RED_BIT;
-	iowrite16(red_out_base, val);
+	iowrite16(val, red_out_base);
 }
-#endif
 
 int lcd_init(void)
 {
@@ -72,9 +70,7 @@ int lcd_init(void)
 	printk(KERN_INFO "calling read16 red\n");
 	val = ioread16(red_out_base);
 	printk(KERN_INFO "I read 0x%x back\n", val);
-	//set_red(1);
-	val |= RED_BIT;
-	iowrite16(val, red_out_base);
+	set_red(1);
 
 	return 0;
 
@@ -93,7 +89,7 @@ void lcd_cleanup(void)
 {
 	// clear the e pin so we can retest
 	printk(KERN_INFO "calling clear red\n");
-	//set_red(0);
+	set_red(0);
 	
 	// clear resources
 	printk(KERN_INFO "freeing resources\n");
