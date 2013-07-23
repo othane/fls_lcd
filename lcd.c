@@ -145,6 +145,10 @@ void lcd_cleanup(void)
 	printk(KERN_INFO "LCD POC driver done\n");
 }
 
+#ifdef MODULE
 module_init(lcd_init);
+#else
+early_initcall(lcd_init);
+#endif
 module_exit(lcd_cleanup);
 
