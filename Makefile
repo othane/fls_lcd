@@ -1,7 +1,7 @@
-obj-m += lcd.o
+obj-m += fls_lcd.o
 
 all:
-	make -C /home/othane/Workspace/ts4x00/linux-2.6.29 M=$(PWD) modules
+	make -C $(KPATH) M=$(PWD) modules
 
 clean:
-	make -C /home/othane/Workspace/ts4x00/linux-2.6.29 M=$(PWD) clean
+	make -C $(KPATH) M=$(PWD) clean
