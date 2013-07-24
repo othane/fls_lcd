@@ -34,6 +34,55 @@ static struct dio_t {
 };
 
 
+static void dio_set(struct dio_t *dio, unsigned int set_mask, unsigned int clear_mask)
+{
+	unsigned int dir, out;
+	unsigned long flags;
+	unsigned int output_mask = set_mask | clear_mask;
+
+	// make these operations seemly atomic (at least
+	// on our single core system)
+	local_irq_save(flags);
+
+	// set and clear output state
+	out = ioread16(dio->out.vaddr);
+	out |= set_mask;
+	out &= ~clear_mask;
+	iowrite16(out, dio->out.vaddr);
+
+	// ensure these pins are outputs (if already inputs they will
+	// all switch together, if some were inputs and some where
+	// outputs there might be a slight glitch between some pins
+	// and if all were outputs this step does nothing effectively
+	dir = ioread16(dio->dir.vaddr);
+	dir |= output_mask; // 1 = output, 0 = input
+	iowrite16(dir, dio->dir.vaddr);
+
+	local_irq_restore(flags);
+}
+
+static unsigned int dio_get(struct dio_t *dio, unsigned int get_mask)
+{
+	unsigned int dir, in;
+	unsigned long flags;
+
+	// make these operations seemly atomic (at least
+	// on our single core system)
+	local_irq_save(flags);
+
+	// ensure these pins are inputs
+	dir = ioread16(dio->dir.vaddr);
+	dir &= ~get_mask; // 1 = output, 0 = input
+	iowrite16(dir, dio->dir.vaddr);
+
+	// set and clear output state
+	in = ioread16(dio->in.vaddr);
+	in &= get_mask;
+	
+	local_irq_restore(flags);
+	return in;
+}
+
 static int dio_init(struct dio_t *dio)
 {
 	// sanity check (can remove after devel phase)
@@ -107,7 +156,6 @@ static void dio_deinit(struct dio_t *dio)
 int lcd_init(void)
 {
 	int ret = 0;
-	uint16_t val;
 
 	// start up msg
 	printk(KERN_INFO "FLS LCD driver started\n");
@@ -120,13 +168,8 @@ int lcd_init(void)
 	}
 
 	// set RS, RW, and E as lo outputs (these remain outputs throughout lcd operation)
-	val = ioread16(lcd_dio.out.vaddr);
-	val &= ~(RS | RW | E);
-	iowrite16(val, lcd_dio.out.vaddr);
-	val = ioread16(lcd_dio.dir.vaddr);
-	val |= (RS | RW | E);
-	iowrite16(val, lcd_dio.dir.vaddr);
-
+	dio_set(&lcd_dio, 0, (RS | RW | E));
+	
 	return 0;
 
 fail:
