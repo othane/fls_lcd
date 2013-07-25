@@ -1,0 +1,7 @@
+#!/bin/sh
+
+KERNEL_PATH="drivers\/misc"
+MODULE="fls_lcd.c"
+
+cat kernel_patch_skel
+diff -u /dev/null ./$MODULE | sed "s/\/dev\/null.*/a\/$KERNEL_PATH\/$MODULE/" | sed "s/\.\/$MODULE.*/b\/$KERNEL_PATH\/$MODULE/"

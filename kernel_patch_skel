@@ -1,0 +1,23 @@
+--- a/drivers/misc/Makefile
++++ b/drivers/misc/Makefile
+@@ -33,3 +33,4 @@
+ obj-y				+= eeprom/
+ obj-$(CONFIG_WL127X_RFKILL)	+= wl127x-rfkill.o
+ obj-$(CONFIG_SD8XXX_RFKILL)	+= sd8x_rfkill.o
++obj-$(CONFIG_FLS_LCD)		+= fls_lcd.o
+--- a/drivers/misc/Kconfig
++++ b/drivers/misc/Kconfig
+@@ -255,6 +255,13 @@
+ 	 Creates an rfkill entry in sysfs for power control of Marvell
+ 	 sd8xxx wlan/bt chips.
+ 
++config FLS_LCD 
++	tristate "FLS-2800 LCD driver"
++	default y
++	---help---
++	This is a driver for the Coherent-Solutions (CS) FLS-2800
++	LCD front panel display
++
+ source "drivers/misc/c2port/Kconfig"
+ source "drivers/misc/eeprom/Kconfig"
+ 
