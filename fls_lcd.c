@@ -9,6 +9,9 @@
 
 #define MODULE_NAME "FLS front panel LCD"
 
+#define LCD_SPLASH_MSG "                 SPLASH  SCREEN "
+
+// hw layout
 #define SYSCON_BASE (0x80004000)
 #define RS	(1 << 6)
 #define RW	(1 << 7)
@@ -17,6 +20,13 @@
 #define D5	(1 << 1)
 #define D6	(1 << 4)
 #define D7	(1 << 5)
+
+// mapping for dram address to position on screen
+#define LINE_LENGTH (0x10)
+#define LINE1_START (0x00)
+#define LINE2_START (0x40)
+#define LINE3_START (0x10)
+#define LINE4_START (0x50)
 
 // timings from datasheet (plus tm to add a little margin so we are safe)
 #define Tpor0     (50)
@@ -67,22 +77,29 @@ enum lcd_blink {
 	lcd_blink_on = 0x01,
 };
 
-enum lcd_lines
-{
+enum lcd_lines {
 	lcd_lines_1 = 0x00,
 	lcd_lines_2 = 0x08,
 };
 
-enum lcd_font
-{
+enum lcd_font {
 	lcd_font_5by8 = 0x00,
 	lcd_font_5by11 = 0x04,
 };
 
-enum lcd_data_len
-{
+enum lcd_data_len {
 	lcd_4bit = 0x00,
 	lcd_8bit = 0x10,
+};
+
+enum lcd_id {
+	lcd_id_left = 0x00,
+	lcd_id_right = 0x02,
+};
+
+enum lcd_sh {
+	lcd_sh_off = 0x00,
+	lcd_sh_on = 0x01,
 };
 
 static struct lcd_t {
@@ -359,6 +376,18 @@ static void lcd_function_set(struct lcd_t *lcd, enum lcd_lines n, enum lcd_font 
 	lcd_write8(lcd, 0, db);
 }
 
+void lcd_cursor(struct lcd_t *lcd, bool enable)
+{
+	lcd->cursor_state = enable ? lcd_cursor_on: lcd_cursor_off;
+	lcd_display_control(lcd, lcd->display_state, lcd->cursor_state, lcd->blink_state);
+}
+
+void lcd_blink(struct lcd_t *lcd, bool enable)
+{
+	lcd->blink_state = enable ? lcd_blink_on: lcd_blink_off;
+	lcd_display_control(lcd, lcd->display_state, lcd->cursor_state, lcd->blink_state);
+}
+
 static void lcd_clear(struct lcd_t *lcd)
 {
 	uint8_t db = 0x01;	// display clear
@@ -376,6 +405,183 @@ static void lcd_home(struct lcd_t *lcd)
 	while (lcd_is_busy(lcd, NULL) == lcd_busy);
 	lcd_write8(lcd, 0, db);
 	lcd->pos = 0;
+}
+
+static void lcd_entry_mode(struct lcd_t *lcd, enum lcd_id id, enum lcd_sh sh)
+{
+	uint8_t db = 0x04;	// entry mode
+
+	// build command
+	db |= id | sh;
+
+	// wait for the lcd to be ready before sending the command
+	while (lcd_is_busy(lcd, NULL) == lcd_busy);
+	lcd_write8(lcd, 0, db);
+}
+
+static void lcd_set_dram_addr(struct lcd_t *lcd, uint8_t addr)
+{
+	uint8_t db = 0x80;	// set dram address 
+
+	// build command
+	addr &= 0x7f;
+	db |= addr;
+
+	// wait for the lcd to be ready before sending the command
+	while (lcd_is_busy(lcd, NULL) == lcd_busy);
+	lcd_write8(lcd, 0, db);
+	lcd->pos = addr;
+}
+
+static void lcd_new_line(struct lcd_t *lcd)
+{
+	if (lcd->pos >= LINE1_START && lcd->pos < (LINE1_START + LINE_LENGTH))
+		// we are in line 1, goto line 2
+		lcd_set_dram_addr(lcd, LINE2_START);
+	else if (lcd->pos >= LINE2_START && lcd->pos < (LINE2_START + LINE_LENGTH))
+		// we are in line 2, goto line 3
+		lcd_set_dram_addr(lcd, LINE3_START);
+	else if (lcd->pos >= LINE3_START && lcd->pos < (LINE3_START + LINE_LENGTH))
+		// we are in line 3, goto line 4
+		lcd_set_dram_addr(lcd, LINE4_START);
+	else if (lcd->pos >= LINE4_START && lcd->pos < (LINE4_START + LINE_LENGTH))
+		// we are in line 4, goto line 1
+		lcd_set_dram_addr(lcd, LINE1_START);
+	else
+		// god knows where we are but go back to start
+		lcd_set_dram_addr(lcd, LINE1_START);
+}
+
+static void lcd_inc_pos(struct lcd_t *lcd)
+{
+	switch (++lcd->pos) {
+		case LINE1_START + LINE_LENGTH:
+			// end of line 1, goto line 2
+			lcd_set_dram_addr(lcd, LINE2_START);
+			break;
+
+		case LINE2_START + LINE_LENGTH:
+			// end of line 2, goto line 3
+			lcd_set_dram_addr(lcd, LINE3_START);
+			break;
+
+		case LINE3_START + LINE_LENGTH:
+			// end of line 3, goto line 4
+			lcd_set_dram_addr(lcd, LINE4_START);
+			break;
+
+		case LINE4_START + LINE_LENGTH:
+			// end of line 4, goto line 1
+			lcd_set_dram_addr(lcd, LINE1_START);
+			break;
+
+		default:
+			break;
+	}
+}
+
+static void lcd_dec_pos(struct lcd_t *lcd)
+{
+	switch (--lcd->pos) {
+		case LINE1_START - 1:
+			// start of line 1, goto line 4
+			lcd_set_dram_addr(lcd, LINE4_START + LINE_LENGTH - 1);
+			break;
+
+		case LINE2_START - 1:
+			// start of line 2, goto line 1
+			lcd_set_dram_addr(lcd, LINE1_START + LINE_LENGTH - 1);
+			break;
+
+		case LINE3_START - 1:
+			// start of line 3, goto line 2
+			lcd_set_dram_addr(lcd, LINE2_START + LINE_LENGTH - 1);
+			break;
+
+		case LINE4_START - 1:
+			// start of line 4, goto line 3
+			lcd_set_dram_addr(lcd, LINE3_START + LINE_LENGTH - 1);
+			break;
+
+		default:
+			break;
+	}
+}
+
+#define LINE_MASK (LINE1_START | LINE2_START | LINE3_START | LINE4_START)
+void lcd_getxy(struct lcd_t *lcd, int *x, int *y)
+{
+	*x = lcd->pos & 0x0f;
+	switch (lcd->pos & LINE_MASK) {
+		case LINE1_START:
+			*y = 0;
+			break;
+		case LINE2_START:
+			*y = 1;
+			break;
+		case LINE3_START:
+			*y = 2;
+			break;
+		case LINE4_START:
+			*y = 3;
+			break;
+		default:
+			// how did we get here !!
+			*y = 0;
+			break;
+	}
+}
+
+enum whence_t {WHENCE_ABS, WHENCE_REL};
+int lcd_gotoxy(struct lcd_t *lcd, int x, int y, enum whence_t whence)
+{
+	int r = 0;
+	int dp;
+
+	switch (whence) {
+		case WHENCE_ABS:
+			// bounds check x,y
+			if (y * LINE_LENGTH + x > 4 * LINE_LENGTH)
+				return -1;
+			lcd_home(lcd);
+			// now we are at 0 fall through to relative moves
+
+		case WHENCE_REL:
+			// x,y are not bounds check on relative moves (they just wrap)
+			dp = y * LINE_LENGTH + x;
+			if (dp < 0) {
+				while (dp++ != 0)
+					lcd_dec_pos(lcd);
+			}
+			else if (dp > 0) {
+				while (dp-- != 0)
+					lcd_inc_pos(lcd);
+			}
+			break;
+	}
+
+	lcd_set_dram_addr(lcd, lcd->pos);
+	return r;
+}
+
+static void lcd_putchar(struct lcd_t *lcd, char c)
+{
+	// wait for the lcd to be ready before sending the command
+	while (lcd_is_busy(lcd, NULL) == lcd_busy);
+	lcd_write8(lcd, 1, c);
+	lcd_inc_pos(lcd);
+}
+
+static void lcd_puts(struct lcd_t *lcd, const char *s)
+{
+	int k;
+
+	// for security we limit this to LINE_LENGTH (overflows)
+	for (k = 0; k < LINE_LENGTH * 4; k++, s++) {
+		if (*s == 0)
+			break;
+		lcd_putchar(lcd, *s);
+	}
 }
 
 static void lcd_4bit_init(struct lcd_t *lcd, enum lcd_lines lines, enum lcd_font font)
@@ -425,6 +631,9 @@ int lcd_init(void)
 	lcd_clear(&lcd);
 	lcd_home(&lcd);
 	lcd_display_control(&lcd, lcd_display_on, lcd_cursor_off, lcd_blink_off);
+
+	// show initial splash screen
+	lcd_puts(&lcd, LCD_SPLASH_MSG);
 
 	return 0;
 
