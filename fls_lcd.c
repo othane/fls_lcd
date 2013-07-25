@@ -4,9 +4,11 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/ioport.h>
+#include <linux/delay.h>
 #include <asm/io.h>
 
 #define MODULE_NAME "FLS front panel LCD"
+
 #define SYSCON_BASE (0x80004000)
 #define RS	(1 << 6)
 #define RW	(1 << 7)
@@ -15,6 +17,18 @@
 #define D5	(1 << 1)
 #define D6	(1 << 4)
 #define D7	(1 << 5)
+
+// timings from datasheet (plus tm to add a little margin so we are safe)
+#define Tpor0     (50)
+#define Tpor1     (5)
+#define Tc        (500)
+#define Tpw       (230)
+#define Tr        (20)
+#define Tf        (20)
+#define Tsp1      (40)
+#define Tsp2      (80)
+#define Td        (120)
+#define Tm        (50)
 
 struct dio_reg_t {
 	unsigned long paddr;
@@ -31,6 +45,31 @@ static struct dio_t {
 	.dir = {.paddr = SYSCON_BASE + 0x1e, .size = 2},
 	.in  = {.paddr = SYSCON_BASE + 0x26, .size = 2},
 	.out = {.paddr = SYSCON_BASE + 0x16, .size = 2},
+};
+
+enum lcd_display {
+	lcd_display_off = 0x00,
+	lcd_display_on = 0x04,
+};
+
+enum lcd_cursor {
+	lcd_cursor_off = 0x00,
+	lcd_cursor_on = 0x02,
+};
+
+enum lcd_blink {
+	lcd_blink_off = 0x00,
+	lcd_blink_on = 0x01,
+};
+
+static struct lcd_t {
+	struct dio_t *dio;
+	int pos;
+	enum lcd_display display_state;
+	enum lcd_cursor cursor_state;
+	enum lcd_blink blink_state;
+} lcd = {
+	.dio = &lcd_dio,
 };
 
 
@@ -153,6 +192,96 @@ static void dio_deinit(struct dio_t *dio)
 	dio->out.res = NULL;
 }
 
+#define cond_to_dio_masks(cond, set, clear, bit) {if (cond) set |= bit; else clear |= bit;}
+static void lcd_write4(struct lcd_t *lcd, uint8_t rs, uint8_t db)
+{
+	unsigned int set = 0;
+	unsigned int clear = 0;
+
+	// set rw = 0 (write), and rs
+	cond_to_dio_masks(rs, set, clear, RS);
+	dio_set(lcd->dio, set, clear | RW);
+
+	// wait for >= tsp1
+	ndelay(Tsp1 - Tr + Tm);
+
+	// set e hi
+	dio_set(lcd->dio, E, 0);
+	ndelay(Tr + Tm);
+
+	// hold e hi for >= tpw - tsp2
+	ndelay(Tpw - Tsp2 + Tm);
+
+	// set/clear db
+	set = 0;
+	clear = 0;
+	cond_to_dio_masks((db & (1 << 4)), set, clear, D4);
+	cond_to_dio_masks((db & (1 << 5)), set, clear, D5);
+	cond_to_dio_masks((db & (1 << 6)), set, clear, D6);
+	cond_to_dio_masks((db & (1 << 7)), set, clear, D7);
+	dio_set(lcd->dio, set, clear);
+	
+	// hack for TS8500: even though u10 is powered off it still adds a lot of capacitance
+	// the d5 line, this takes 5us to die away so we add a 10us delay here to handle that
+	// on the real fls this should not be needed as there is no u10
+	udelay(10);
+	
+	// hold db and enable for >= tps2
+	ndelay(Tsp2 + Tm);
+
+	// set e lo
+	dio_set(lcd->dio, 0, E);
+	ndelay(Tf + Tm);
+
+	// wait for >= thd1 + tf
+	ndelay(Tc - Tr - Tpw - Tf + Tm);
+}
+
+static uint8_t lcd_read4(struct lcd_t *lcd, uint8_t rs)
+{
+	uint8_t db = 0, tmp;
+	unsigned int set = 0;
+	unsigned int clear = 0;
+
+	// set rw = 1 (read), and rs
+	cond_to_dio_masks(rs, set, clear, RS);
+	dio_set(lcd->dio, set | RW, clear);
+
+	// wait for >= tsp1
+	ndelay(Tsp1 - Tr + Tm);
+
+	// set e hi
+	dio_set(lcd->dio, E, 0);
+	ndelay(Tr + Tm);
+
+	// hold e hi for >= tpw - tsp2
+	ndelay(Td - Tr + Tm);
+
+	// hack for TS8500: even though u10 is powered off it still adds a lot of capacitance
+	// the d5 line, this takes 5us to die away so we add a 10us delay here to handle that
+	// on the real fls this should not be needed as there is no u10
+	udelay(10);
+
+	// set/clear db
+	tmp = dio_get(lcd->dio, D4 | D5 | D6 | D7);
+	db |= tmp & D4 ? (1 << 4): 0;
+	db |= tmp & D5 ? (1 << 5): 0;
+	db |= tmp & D6 ? (1 << 6): 0;
+	db |= tmp & D7 ? (1 << 7): 0;
+	
+	// hold db and enable for >= tps2
+	ndelay(Tpw + Tr - Td + Tm);
+	
+	// set e lo
+	dio_set(lcd->dio, 0, E);
+	ndelay(Tf + Tm);
+
+	// wait for >= thd1 + tf
+	ndelay(Tc - Tr - Tpw - Tf + Tm);
+
+	return db;
+}
+
 int lcd_init(void)
 {
 	int ret = 0;
@@ -161,27 +290,27 @@ int lcd_init(void)
 	printk(KERN_INFO "FLS LCD driver started\n");
 
 	// init the registers etc
-	ret = dio_init(&lcd_dio);
+	ret = dio_init(lcd.dio);
 	if (ret < 0) {
 		printk(KERN_ERR "lcd module unable to init dio, bailing out\n");
 		goto fail;
 	}
 
 	// set RS, RW, and E as lo outputs (these remain outputs throughout lcd operation)
-	dio_set(&lcd_dio, 0, (RS | RW | E));
-	
+	dio_set(lcd.dio, 0, (RS | RW | E));
+
 	return 0;
 
 fail:
 	// deinit registers etc
-	dio_deinit(&lcd_dio);
+	dio_deinit(lcd.dio);
 	return ret;
 }
 
 void lcd_cleanup(void)
 {
 	// deinit registers etc
-	dio_deinit(&lcd_dio);
+	dio_deinit(lcd.dio);
 
 	// shutdown msg
 	printk(KERN_INFO "FLS LCD driver done\n");
