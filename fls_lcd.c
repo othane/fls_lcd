@@ -359,6 +359,25 @@ static void lcd_function_set(struct lcd_t *lcd, enum lcd_lines n, enum lcd_font 
 	lcd_write8(lcd, 0, db);
 }
 
+static void lcd_clear(struct lcd_t *lcd)
+{
+	uint8_t db = 0x01;	// display clear
+
+	// wait for the lcd to be ready before sending the command
+	while (lcd_is_busy(lcd, NULL) == lcd_busy);
+	lcd_write8(lcd, 0, db);
+}
+
+static void lcd_home(struct lcd_t *lcd)
+{
+	uint8_t db = 0x02;	// home 
+
+	// wait for the lcd to be ready before sending the command
+	while (lcd_is_busy(lcd, NULL) == lcd_busy);
+	lcd_write8(lcd, 0, db);
+	lcd->pos = 0;
+}
+
 static void lcd_4bit_init(struct lcd_t *lcd, enum lcd_lines lines, enum lcd_font font)
 {
 	// power on
@@ -401,6 +420,11 @@ int lcd_init(void)
 	// do 4 bit init sequence (see datasheet, p16)
 	// we cannot change the number of lines or font after this (see datasheet, p16)
 	lcd_4bit_init(&lcd, lcd_lines_2, lcd_font_5by8);
+
+	// now do our init
+	lcd_clear(&lcd);
+	lcd_home(&lcd);
+	lcd_display_control(&lcd, lcd_display_on, lcd_cursor_off, lcd_blink_off);
 
 	return 0;
 
