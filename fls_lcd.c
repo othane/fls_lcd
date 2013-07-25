@@ -47,6 +47,11 @@ static struct dio_t {
 	.out = {.paddr = SYSCON_BASE + 0x16, .size = 2},
 };
 
+enum lcd_busy_state {
+	lcd_idle = 0x00,
+	lcd_busy = 0x80,
+};
+
 enum lcd_display {
 	lcd_display_off = 0x00,
 	lcd_display_on = 0x04,
@@ -60,6 +65,24 @@ enum lcd_cursor {
 enum lcd_blink {
 	lcd_blink_off = 0x00,
 	lcd_blink_on = 0x01,
+};
+
+enum lcd_lines
+{
+	lcd_lines_1 = 0x00,
+	lcd_lines_2 = 0x08,
+};
+
+enum lcd_font
+{
+	lcd_font_5by8 = 0x00,
+	lcd_font_5by11 = 0x04,
+};
+
+enum lcd_data_len
+{
+	lcd_4bit = 0x00,
+	lcd_8bit = 0x10,
 };
 
 static struct lcd_t {
@@ -237,6 +260,12 @@ static void lcd_write4(struct lcd_t *lcd, uint8_t rs, uint8_t db)
 	ndelay(Tc - Tr - Tpw - Tf + Tm);
 }
 
+static void lcd_write8(struct lcd_t *lcd, uint8_t rs, uint8_t db)
+{
+	lcd_write4(lcd, rs, db);        // upper nibble first
+	lcd_write4(lcd, rs, db << 4);   // then lower nibble
+}
+
 static uint8_t lcd_read4(struct lcd_t *lcd, uint8_t rs)
 {
 	uint8_t db = 0, tmp;
@@ -282,6 +311,76 @@ static uint8_t lcd_read4(struct lcd_t *lcd, uint8_t rs)
 	return db;
 }
 
+static uint8_t lcd_read8(struct lcd_t *lcd, uint8_t rs)
+{
+	uint8_t db = 0;
+	db |= (lcd_read4(lcd, rs) >> 0) & 0xf0;
+	db |= (lcd_read4(lcd, rs) >> 4) & 0x0f;
+	return db;
+}
+
+static enum lcd_busy_state lcd_is_busy(struct lcd_t *lcd, uint8_t *addr)
+{
+	uint8_t db;
+	db = lcd_read8(lcd, 0);
+	if (addr)
+		*addr = db & 0x7f;
+	return db & 0x80;
+}
+
+void lcd_display_control(struct lcd_t *lcd, enum lcd_display d, enum lcd_cursor c, enum lcd_blink b)
+{
+	uint8_t db = 0x08;	// display control 
+
+	// build command
+	db |= d | c | b;
+
+	// wait for the lcd to be ready before sending the command
+	while (lcd_is_busy(lcd, NULL) == lcd_busy);
+	lcd_write8(lcd, 0, db);
+
+	// update states
+	lcd->display_state = d;
+	lcd->cursor_state = c;
+	lcd->blink_state = b;
+}
+
+static void lcd_function_set(struct lcd_t *lcd, enum lcd_lines n, enum lcd_font f)
+{
+	// warning I think this function (or parts of it) may only work at power on
+	// see the datasheet (section 4-bit interface mode, p16)
+	uint8_t db = 0x20;	// function set
+
+	// build command
+	db |= lcd_4bit | n | f;
+
+	// wait for the lcd to be ready before sending the command
+	while (lcd_is_busy(lcd, NULL) == lcd_busy);
+	lcd_write8(lcd, 0, db);
+}
+
+static void lcd_4bit_init(struct lcd_t *lcd, enum lcd_lines lines, enum lcd_font font)
+{
+	// power on
+	///@todo turn the power switch on when available
+	mdelay(Tpor0);
+
+	// clear all pins on power up and let lcd boot
+	// note datasheet says set db to 0x30 but working 
+	// example code uses 0x00 so I will follow that (seems
+	// to work)
+	dio_set(lcd->dio, 0, RS | RW | E | D7 | D6 | D5 | D4);
+	mdelay(Tpor1);
+
+	// set 4 bit mode
+	lcd_write4(lcd, 0, 0x20);
+	while (lcd_is_busy(lcd, NULL) == lcd_busy);
+
+	// set initial startup settings recommended in the datasheet
+	lcd_display_control(lcd, lcd_display_off, lcd_cursor_off, lcd_blink_off); // turn everything off
+	lcd_function_set(lcd, lines, font); // these can only be set after power on (see datasheet p16)
+}
+
 int lcd_init(void)
 {
 	int ret = 0;
@@ -298,6 +397,10 @@ int lcd_init(void)
 
 	// set RS, RW, and E as lo outputs (these remain outputs throughout lcd operation)
 	dio_set(lcd.dio, 0, (RS | RW | E));
+
+	// do 4 bit init sequence (see datasheet, p16)
+	// we cannot change the number of lines or font after this (see datasheet, p16)
+	lcd_4bit_init(&lcd, lcd_lines_2, lcd_font_5by8);
 
 	return 0;
 
