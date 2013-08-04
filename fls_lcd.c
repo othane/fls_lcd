@@ -264,7 +264,7 @@ static void lcd_write4(struct lcd_t *lcd, uint8_t rs, uint8_t db)
 	// hack for TS8500: even though u10 is powered off it still adds a lot of capacitance
 	// the d5 line, this takes 5us to die away so we add a 10us delay here to handle that
 	// on the real fls this should not be needed as there is no u10
-	udelay(10);
+	udelay(50);
 	
 	// hold db and enable for >= tps2
 	ndelay(Tsp2 + Tm);
@@ -306,7 +306,7 @@ static uint8_t lcd_read4(struct lcd_t *lcd, uint8_t rs)
 	// hack for TS8500: even though u10 is powered off it still adds a lot of capacitance
 	// the d5 line, this takes 5us to die away so we add a 10us delay here to handle that
 	// on the real fls this should not be needed as there is no u10
-	udelay(10);
+	udelay(50);
 
 	// set/clear db
 	tmp = dio_get(lcd->dio, D4 | D5 | D6 | D7);
