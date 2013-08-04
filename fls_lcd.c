@@ -345,6 +345,21 @@ static enum lcd_busy_state lcd_is_busy(struct lcd_t *lcd, uint8_t *addr)
 	return db & 0x80;
 }
 
+static int lcd_busy_wait(struct lcd_t *lcd)
+{
+	int t = 0;
+	while (t < 10000) { // wait up to 10ms max for lcd to be ready
+		if (lcd_is_busy(lcd, NULL) == lcd_idle)
+			return 0;
+		udelay(500);
+		t += 500;
+	}
+	if (lcd_is_busy(lcd, NULL) == lcd_idle)
+		return 0;
+	printk(KERN_ERR "timed-out waiting for lcd to return from busy state\n");
+	return -1;
+}
+
 void lcd_display_control(struct lcd_t *lcd, enum lcd_display d, enum lcd_cursor c, enum lcd_blink b)
 {
 	uint8_t db = 0x08;	// display control 
@@ -353,7 +368,7 @@ void lcd_display_control(struct lcd_t *lcd, enum lcd_display d, enum lcd_cursor 
 	db |= d | c | b;
 
 	// wait for the lcd to be ready before sending the command
-	while (lcd_is_busy(lcd, NULL) == lcd_busy);
+	lcd_busy_wait(lcd);
 	lcd_write8(lcd, 0, db);
 
 	// update states
@@ -372,7 +387,7 @@ static void lcd_function_set(struct lcd_t *lcd, enum lcd_lines n, enum lcd_font 
 	db |= lcd_4bit | n | f;
 
 	// wait for the lcd to be ready before sending the command
-	while (lcd_is_busy(lcd, NULL) == lcd_busy);
+	lcd_busy_wait(lcd);
 	lcd_write8(lcd, 0, db);
 }
 
@@ -393,7 +408,7 @@ static void lcd_clear(struct lcd_t *lcd)
 	uint8_t db = 0x01;	// display clear
 
 	// wait for the lcd to be ready before sending the command
-	while (lcd_is_busy(lcd, NULL) == lcd_busy);
+	lcd_busy_wait(lcd);
 	lcd_write8(lcd, 0, db);
 }
 
@@ -402,7 +417,7 @@ static void lcd_home(struct lcd_t *lcd)
 	uint8_t db = 0x02;	// home 
 
 	// wait for the lcd to be ready before sending the command
-	while (lcd_is_busy(lcd, NULL) == lcd_busy);
+	lcd_busy_wait(lcd);
 	lcd_write8(lcd, 0, db);
 	lcd->pos = 0;
 }
@@ -415,7 +430,7 @@ static void lcd_entry_mode(struct lcd_t *lcd, enum lcd_id id, enum lcd_sh sh)
 	db |= id | sh;
 
 	// wait for the lcd to be ready before sending the command
-	while (lcd_is_busy(lcd, NULL) == lcd_busy);
+	lcd_busy_wait(lcd);
 	lcd_write8(lcd, 0, db);
 }
 
@@ -428,7 +443,7 @@ static void lcd_set_dram_addr(struct lcd_t *lcd, uint8_t addr)
 	db |= addr;
 
 	// wait for the lcd to be ready before sending the command
-	while (lcd_is_busy(lcd, NULL) == lcd_busy);
+	lcd_busy_wait(lcd);
 	lcd_write8(lcd, 0, db);
 	lcd->pos = addr;
 }
@@ -567,7 +582,7 @@ int lcd_gotoxy(struct lcd_t *lcd, int x, int y, enum whence_t whence)
 static void lcd_putchar(struct lcd_t *lcd, char c)
 {
 	// wait for the lcd to be ready before sending the command
-	while (lcd_is_busy(lcd, NULL) == lcd_busy);
+	lcd_busy_wait(lcd);
 	lcd_write8(lcd, 1, c);
 	lcd_inc_pos(lcd);
 }
@@ -599,7 +614,7 @@ static void lcd_4bit_init(struct lcd_t *lcd, enum lcd_lines lines, enum lcd_font
 
 	// set 4 bit mode
 	lcd_write4(lcd, 0, 0x20);
-	while (lcd_is_busy(lcd, NULL) == lcd_busy);
+	lcd_busy_wait(lcd);
 
 	// set initial startup settings recommended in the datasheet
 	lcd_display_control(lcd, lcd_display_off, lcd_cursor_off, lcd_blink_off); // turn everything off
