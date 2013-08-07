@@ -645,8 +645,6 @@ ssize_t lcd_write(struct file *filp, const char __user *buf, size_t count, loff_
 	size_t l;
 	int x, y;
 
-	printk(KERN_INFO "write %d bytes called\n", count);
-
 	// buffer the user data local so we loop through
 	// without needing to be able to sleep
 	_buf = kmalloc(count, GFP_KERNEL);
