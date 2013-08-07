@@ -5,11 +5,19 @@
 #include <linux/kernel.h>
 #include <linux/ioport.h>
 #include <linux/delay.h>
+#include <linux/fs.h>
+#include <linux/cdev.h>
+#include <linux/device.h>
 #include <asm/io.h>
+#include <asm/uaccess.h>
 
 #define MODULE_NAME "FLS front panel LCD"
 
 #define LCD_SPLASH_MSG "                 SPLASH  SCREEN "
+
+static int major = 0;		/* default to dynamic major */
+module_param(major, int, 0);
+MODULE_PARM_DESC(major, "Major device number");
 
 // hw layout
 #define SYSCON_BASE (0x80004000)
@@ -112,6 +120,7 @@ static struct lcd_t {
 	.dio = &lcd_dio,
 };
 
+static struct cdev cdev;
 
 static void dio_set(struct dio_t *dio, unsigned int set_mask, unsigned int clear_mask)
 {
@@ -621,9 +630,76 @@ static void lcd_4bit_init(struct lcd_t *lcd, enum lcd_lines lines, enum lcd_font
 	lcd_function_set(lcd, lines, font); // these can only be set after power on (see datasheet p16)
 }
 
+ssize_t lcd_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
+{
+	int ret = 0;
+	char *_buf = NULL;
+	unsigned long tmp;
+
+	printk(KERN_INFO "write %d bytes called\n", count);
+
+	// buffer the user data local so we loop through
+	// without needing to be able to sleep
+	_buf = kmalloc(count, GFP_KERNEL);
+	if (!_buf) {
+		printk(KERN_ERR "unable to alloc write buffer\n");
+		ret = -ENOMEM;
+		goto exit;
+	}
+	memset(_buf, 0, count);
+	if (copy_from_user(_buf, buf, count)) {
+		// do not support partial writes (this might cause the lcd to flicker for one)
+		printk(KERN_ERR "bad write buffer, write rejected\n");
+		ret = -EFAULT;
+		goto exit;
+	}
+
+	// process buffer
+	for (tmp = 0; tmp < count; tmp++) {
+		printk(KERN_INFO "_buf[%.2lu] = '%c'\n", tmp, _buf[tmp]);
+	}
+
+	// success
+	ret = count;
+
+exit:
+	if (_buf)
+		kfree(_buf);
+	return ret;
+}
+
+static atomic_t lcd_available = ATOMIC_INIT(1);
+
+int lcd_open(struct inode *inode, struct file *filp)
+{
+	if (!atomic_dec_and_test(&lcd_available)) {
+		atomic_inc(&lcd_available);
+		return -EBUSY; // already open
+	}
+
+	return 0;
+}
+
+int lcd_release(struct inode *inode, struct file *filp)
+{
+	atomic_inc(&lcd_available);
+	return 0;
+}
+
+static struct file_operations fops = {
+	.owner = THIS_MODULE,
+	.write = lcd_write,
+	.open = lcd_open,
+	.release = lcd_release,
+};
+
+static struct class *cl;
+
 int lcd_init(void)
 {
 	int ret = 0;
+	dev_t devno;
+	struct device *device;
 
 	// start up msg
 	printk(KERN_INFO "FLS LCD driver started\n");
@@ -650,8 +726,51 @@ int lcd_init(void)
 	// show initial splash screen
 	lcd_puts(&lcd, LCD_SPLASH_MSG);
 
+	// allocate a new dev number (this can be dynamic or
+	// static if passed in as a module param)
+	if (major) {
+		devno = MKDEV(major, 0);
+		ret = register_chrdev_region(devno, 1, MODULE_NAME);
+	} else {
+		ret = alloc_chrdev_region(&devno, 0, 1, MODULE_NAME);
+		major = MAJOR(devno);
+	}
+	if (ret < 0) {
+		printk(KERN_ERR "alloc_chrdev_region failed\n");
+		goto fail;
+	}
+
+	// lets create a dummy class for the lcd
+	cl = class_create(THIS_MODULE, "lcd");
+	if (IS_ERR(cl)) {
+		printk(KERN_ERR "class_simple_create for class lcd failed\n");
+		goto fail1;
+	}
+
+	// create cdev interface
+	cdev_init(&cdev, &fops);
+	cdev.owner = THIS_MODULE;
+	ret = cdev_add(&cdev, devno, 1);
+	if (ret) {
+		printk(KERN_ERR "cdev_add failed\n");
+		goto fail2;
+	}
+
+	// create /sys/lcd/fplcd/dev so udev will add our device to /dev/fplcd
+	device = device_create(cl, NULL, devno, NULL, "lcd");
+	if (IS_ERR(device)) {
+		printk(KERN_ERR "device_create for fplcd failed\n");
+		goto fail3;
+	}
+
 	return 0;
 
+fail3:
+	cdev_del(&cdev);
+fail2:
+	class_destroy(cl);
+fail1:
+	unregister_chrdev_region(devno, 1);
 fail:
 	// deinit registers etc
 	dio_deinit(lcd.dio);
@@ -660,6 +779,12 @@ fail:
 
 void lcd_cleanup(void)
 {
+	// clean up device node
+	device_destroy(cl, MKDEV(major, 0));
+	cdev_del(&cdev);
+	class_destroy(cl);
+	unregister_chrdev_region(MKDEV(major, 0), 1);
+
 	// deinit registers etc
 	dio_deinit(lcd.dio);
 
@@ -673,4 +798,6 @@ module_init(lcd_init);
 early_initcall(lcd_init);
 #endif
 module_exit(lcd_cleanup);
+
+MODULE_LICENSE("GPL");
 
