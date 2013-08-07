@@ -110,14 +110,22 @@ enum lcd_sh {
 	lcd_sh_on = 0x01,
 };
 
+enum write_state {
+	WRITE_STATE_NORMAL,
+	WRITE_STATE_ESCAPE1
+};
+
 static struct lcd_t {
 	struct dio_t *dio;
 	int pos;
+	enum write_state wstate;
 	enum lcd_display display_state;
 	enum lcd_cursor cursor_state;
 	enum lcd_blink blink_state;
 } lcd = {
 	.dio = &lcd_dio,
+	.pos = 0,
+	.wstate = WRITE_STATE_NORMAL,
 };
 
 static struct cdev cdev;
@@ -634,7 +642,8 @@ ssize_t lcd_write(struct file *filp, const char __user *buf, size_t count, loff_
 {
 	int ret = 0;
 	char *_buf = NULL;
-	unsigned long tmp;
+	size_t l;
+	int x, y;
 
 	printk(KERN_INFO "write %d bytes called\n", count);
 
@@ -655,8 +664,109 @@ ssize_t lcd_write(struct file *filp, const char __user *buf, size_t count, loff_
 	}
 
 	// process buffer
-	for (tmp = 0; tmp < count; tmp++) {
-		printk(KERN_INFO "_buf[%.2lu] = '%c'\n", tmp, _buf[tmp]);
+	for (l = 0; l < count && _buf[l] != 0; l++)
+	{
+		switch (lcd.wstate)
+		{
+			case WRITE_STATE_NORMAL:
+				switch(_buf[l])
+				{
+					case 0x1b:
+						// escape char mode !
+						lcd.wstate = WRITE_STATE_ESCAPE1;
+						break;
+					case '\n':
+						// new line
+						lcd_gotoxy(&lcd, 0, 1, WHENCE_REL);
+						break;
+					case '\r':
+						// cr (goto x = 0)
+						lcd_getxy(&lcd, &x, &y);
+						lcd_gotoxy(&lcd, -x, 0, WHENCE_REL);
+						break;
+					case '\t':
+						// tab (align to 4 bytes)
+						do
+						{
+							lcd_putchar(&lcd, ' ');
+							lcd_getxy(&lcd, &x, &y);
+						}
+						while (x % 4 != 0);
+						break;
+					case '\b':
+						// backspace
+						lcd_gotoxy(&lcd, -1, 0, WHENCE_REL);
+						break;
+					default:
+						// normal characters
+						lcd_putchar(&lcd, _buf[l]);
+						break;
+				}
+				break;
+
+			case WRITE_STATE_ESCAPE1:
+				switch(_buf[l])
+				{
+					case 'a':
+						// all attributes off (blink = 0)
+						lcd_cursor(&lcd, 0);
+						lcd_blink(&lcd, 0);
+						lcd.wstate = WRITE_STATE_NORMAL;
+						break;
+					case 'b':
+						// blink on
+						lcd_blink(&lcd, 1);
+						lcd.wstate = WRITE_STATE_NORMAL;
+						break;
+					case 'v':
+						// cursor visible
+						lcd_cursor(&lcd, 1);
+						lcd.wstate = WRITE_STATE_NORMAL;
+						break;
+					case 'V':
+						// cursor invisible
+						lcd_cursor(&lcd, 0);
+						lcd.wstate = WRITE_STATE_NORMAL;
+						break;
+					case 'H':
+						// home cursor wtf does this mean (0,0 or sol)?
+						lcd_gotoxy(&lcd, 0, 0, WHENCE_ABS);
+						lcd.wstate = WRITE_STATE_NORMAL;
+						break;
+					case 'J':
+						// clear screen and home the cursor
+						lcd_clear(&lcd);
+						lcd_gotoxy(&lcd, 0, 0, WHENCE_ABS);
+						lcd.wstate = WRITE_STATE_NORMAL;
+						break;
+					case 'B':
+						// move down 1
+						lcd_gotoxy(&lcd, 0, 1, WHENCE_REL);
+						lcd.wstate = WRITE_STATE_NORMAL;
+						break;
+					case 'A':
+						// move up 1
+						lcd_gotoxy(&lcd, 0, -1, WHENCE_REL);
+						lcd.wstate = WRITE_STATE_NORMAL;
+						break;
+					case 'D':
+						// move left 1
+						lcd_gotoxy(&lcd, -1, 0, WHENCE_REL);
+						lcd.wstate = WRITE_STATE_NORMAL;
+						break;
+					case 'C':
+						// move right 1
+						lcd_gotoxy(&lcd, 1, 0, WHENCE_REL);
+						lcd.wstate = WRITE_STATE_NORMAL;
+						break;
+					default:
+						// unknown escape code (just dump the output)
+						printk(KERN_WARNING "unknown escape code %.2x\n", _buf[l]);
+						lcd.wstate = WRITE_STATE_NORMAL;
+						break;
+				}
+				break;
+		}
 	}
 
 	// success
