@@ -465,25 +465,6 @@ static void lcd_set_dram_addr(struct lcd_t *lcd, uint8_t addr)
 	lcd->pos = addr;
 }
 
-static void lcd_new_line(struct lcd_t *lcd)
-{
-	if (lcd->pos >= LINE1_START && lcd->pos < (LINE1_START + LINE_LENGTH))
-		// we are in line 1, goto line 2
-		lcd_set_dram_addr(lcd, LINE2_START);
-	else if (lcd->pos >= LINE2_START && lcd->pos < (LINE2_START + LINE_LENGTH))
-		// we are in line 2, goto line 3
-		lcd_set_dram_addr(lcd, LINE3_START);
-	else if (lcd->pos >= LINE3_START && lcd->pos < (LINE3_START + LINE_LENGTH))
-		// we are in line 3, goto line 4
-		lcd_set_dram_addr(lcd, LINE4_START);
-	else if (lcd->pos >= LINE4_START && lcd->pos < (LINE4_START + LINE_LENGTH))
-		// we are in line 4, goto line 1
-		lcd_set_dram_addr(lcd, LINE1_START);
-	else
-		// god knows where we are but go back to start
-		lcd_set_dram_addr(lcd, LINE1_START);
-}
-
 static void lcd_inc_pos(struct lcd_t *lcd)
 {
 	switch (++lcd->pos) {
