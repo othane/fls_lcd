@@ -643,7 +643,6 @@ loff_t lcd_llseek(struct file *filp, loff_t off, int whence)
 			return -EINVAL;
 	}
 	filp->f_pos = lcd.pos;
-	printk(KERN_INFO "lcd_llseek complete\n");
 	return lcd.pos;
 }
 
