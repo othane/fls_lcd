@@ -13,24 +13,24 @@ void test(void)
 	log("hello world test\n", 1);
 	rewind(lcd);
 	fprintf(lcd, "\eJ\eH"); // escape seq to clear screen and goto home
-	fprintf(lcd, "hello world\n");
-	fprintf(lcd, "hello world\n");
+	fprintf(lcd, "hello world\n\r");
+	fprintf(lcd, "hello world\n\r");
 	fflush(lcd);
 	sleep(5);
 	rewind(lcd);
-	fprintf(lcd, "           \n");
-	fprintf(lcd, "           \n");
+	fprintf(lcd, "           \n\r");
+	fprintf(lcd, "           \n\r");
 	fflush(lcd);
 
 	// random number test
 	log("random number test\n", 1);
 	srand(time(NULL));
 	fseek(lcd, 0x11, SEEK_SET);
-	fprintf(lcd, "random test:\n");
+	fprintf(lcd, "random test:\n\r");
 	for (k = 0; k < 10; k++)
 	{
 		fseek(lcd, 0x20, SEEK_SET);
-		fprintf(lcd, "\t%1.4f\t%1.2f\n", 
+		fprintf(lcd, "\t%1.4f\t%1.2f\n\r", 
 			(float)rand()/(float)RAND_MAX,
 			(float)rand()/(float)RAND_MAX);
 		fflush(lcd);
