@@ -830,7 +830,7 @@ int lcd_init(void)
 		goto fail;
 	}
 
-	// lets create a dummy class for the lcd
+	// create a dummy class for the lcd
 	cl = class_create(THIS_MODULE, "lcd");
 	if (IS_ERR(cl)) {
 		printk(KERN_ERR "class_simple_create for class lcd failed\n");
