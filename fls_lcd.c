@@ -747,6 +747,7 @@ ssize_t lcd_write(struct file *filp, const char __user *buf, size_t count, loff_
 				break;
 		}
 	}
+	*f_pos = lcd.pos;
 
 	// success
 	ret = count;
