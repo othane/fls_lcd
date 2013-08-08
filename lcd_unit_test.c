@@ -3,17 +3,16 @@
 #include <fcntl.h>
 #define log(msg, ...) fprintf(stdout, __FILE__ ":%s():[%d]:" msg, __func__, __LINE__, __VA_ARGS__)
 
-//FILE *lcd;
-int lcd;
+FILE *lcd;
 
-#ifdef fcmds
 void test(void)
 {
 	int k;
 
 	// a lot of hello's
-	log("hello world test\n");
+	log("hello world test\n", 1);
 	rewind(lcd);
+	fprintf(lcd, "\eJ\eH"); // escape seq to clear screen and goto home
 	fprintf(lcd, "hello world\n");
 	fprintf(lcd, "hello world\n");
 	fflush(lcd);
@@ -24,7 +23,7 @@ void test(void)
 	fflush(lcd);
 
 	// random number test
-	log("random number test\n");
+	log("random number test\n", 1);
 	srand(time(NULL));
 	fseek(lcd, 0x11, SEEK_SET);
 	fprintf(lcd, "random test:\n");
@@ -39,7 +38,7 @@ void test(void)
 	}
 
 	// long test
-	log("long test\n");
+	log("long test\n", 1);
 	rewind(lcd);
 	fprintf(lcd, "%1.48f", (float)rand()/(float)RAND_MAX);
 	fflush(lcd);
@@ -52,40 +51,16 @@ void test(void)
 		fflush(lcd);
 	}
 }
-#else
-void test(void)
-{
-	int k;
-
-	// a lot of hello's
-	log("hello world test\n",1);
-	if (lseek(lcd, 0, SEEK_CUR) == -1) {
-		log("failed to seek\n", 1);
-	}
-}
-#endif
 
 int main(int argc, char **argv)
 {
-	#ifdef fcmds
 	lcd = fopen("/dev/lcd", "r+");
 	if (lcd == NULL)
 		exit(EXIT_FAILURE);
-	#else
-	lcd = open("/dev/lcd", O_RDWR);
-	if (lcd == -1) {
-		perror("unable to open lcd");
-		exit(EXIT_FAILURE);
-	}
-	#endif
 
 	test();
 
-	#ifdef fcmds
 	fclose(lcd);
-	#else
-	close(lcd);
-	#endif
 	return 0;
 }
 
