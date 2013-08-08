@@ -619,6 +619,34 @@ static void lcd_4bit_init(struct lcd_t *lcd, enum lcd_lines lines, enum lcd_font
 	lcd_function_set(lcd, lines, font); // these can only be set after power on (see datasheet p16)
 }
 
+loff_t lcd_llseek(struct file *filp, loff_t off, int whence)
+{
+	switch (whence) {
+		case 0: // SEEK_SET
+			if (off > 4*LINE_LENGTH || off < 0) {
+				printk(KERN_ERR "unsupported SEEK_SET offset %llx\n", off);
+				return -EINVAL;
+			}
+			lcd_gotoxy(&lcd, off, 0, WHENCE_ABS);
+			break;
+		case 1: // SEEK_CUR
+			if (off > 4*LINE_LENGTH || off < -4*LINE_LENGTH) {
+				printk(KERN_ERR "unsupported SEEK_CUR offset %llx\n", off);
+				return -EINVAL;
+			}
+			lcd_gotoxy(&lcd, off, 0, WHENCE_REL);
+			break;
+		case 2: // SEEK_END (not supported, hence fall though)
+		default:
+			// how did we get here !
+			printk(KERN_ERR "unsupported seek operation\n");
+			return -EINVAL;
+	}
+	filp->f_pos = lcd.pos;
+	printk(KERN_INFO "lcd_llseek complete\n");
+	return lcd.pos;
+}
+
 ssize_t lcd_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
 {
 	int ret = 0;
@@ -779,6 +807,7 @@ int lcd_release(struct inode *inode, struct file *filp)
 static struct file_operations fops = {
 	.owner = THIS_MODULE,
 	.write = lcd_write,
+	.llseek = lcd_llseek,
 	.open = lcd_open,
 	.release = lcd_release,
 };
