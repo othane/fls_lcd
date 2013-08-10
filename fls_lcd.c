@@ -122,10 +122,12 @@ static struct lcd_t {
 	enum lcd_display display_state;
 	enum lcd_cursor cursor_state;
 	enum lcd_blink blink_state;
+	bool am;
 } lcd = {
 	.dio = &lcd_dio,
 	.pos = 0,
 	.wstate = WRITE_STATE_NORMAL,
+	.am = true,
 };
 
 static struct cdev cdev;
@@ -465,65 +467,187 @@ static void lcd_set_dram_addr(struct lcd_t *lcd, uint8_t addr)
 	lcd->pos = addr;
 }
 
+#define LINE1_EOLPP (0x20)
+#define LINE2_EOLPP (0x21)
+#define LINE3_EOLPP (0x60)
+#define LINE4_EOLPP (0x61)
+#define LINE1_SOLMM (0x67)
+#define LINE2_SOLMM (0x66)
+#define LINE3_SOLMM (0x27)
+#define LINE4_SOLMM (0x26)
+static void lcd_set_am(struct lcd_t *lcd, bool am)
+{
+	if (am && !lcd->am) {
+		// enable am when currently disabled
+		switch (lcd->pos) {
+			case LINE1_EOLPP:
+				lcd_set_dram_addr(lcd, LINE1_START + LINE_LENGTH - 1);
+				break;
+			case LINE2_EOLPP:
+				lcd_set_dram_addr(lcd, LINE2_START + LINE_LENGTH - 1);
+				break;
+			case LINE3_EOLPP:
+				lcd_set_dram_addr(lcd, LINE3_START + LINE_LENGTH - 1);
+				break;
+			case LINE4_EOLPP:
+				lcd_set_dram_addr(lcd, LINE4_START + LINE_LENGTH - 1);
+				break;
+			case LINE1_SOLMM:
+				lcd_set_dram_addr(lcd, LINE1_START);
+				break;
+			case LINE2_SOLMM:
+				lcd_set_dram_addr(lcd, LINE2_START);
+				break;
+			case LINE3_SOLMM:
+				lcd_set_dram_addr(lcd, LINE3_START);
+				break;
+			case LINE4_SOLMM:
+				lcd_set_dram_addr(lcd, LINE4_START);
+				break;
+			default:
+				break;
+		}
+	} else if (!am && lcd->am) {
+		// disable am (do nothing, we are already at a valid location
+		// and will just roll off the eol or sol naturally
+	}
+	
+	lcd->am = am;
+}
+
 static void lcd_inc_pos(struct lcd_t *lcd)
 {
-	switch (++lcd->pos) {
-		case LINE1_START + LINE_LENGTH:
-			// end of line 1, goto line 2
-			lcd_set_dram_addr(lcd, LINE2_START);
-			break;
-
-		case LINE2_START + LINE_LENGTH:
-			// end of line 2, goto line 3
-			lcd_set_dram_addr(lcd, LINE3_START);
-			break;
-
-		case LINE3_START + LINE_LENGTH:
-			// end of line 3, goto line 4
-			lcd_set_dram_addr(lcd, LINE4_START);
-			break;
-
-		case LINE4_START + LINE_LENGTH:
-			// end of line 4, goto line 1
-			lcd_set_dram_addr(lcd, LINE1_START);
-			break;
-
-		default:
-			break;
+	if (lcd->am) {
+		// automatic margins (wrap to next line)
+		switch (++lcd->pos) {
+			case LINE1_START + LINE_LENGTH:
+				// end of line 1, goto line 2
+				lcd_set_dram_addr(lcd, LINE2_START);
+				break;
+			case LINE2_START + LINE_LENGTH:
+				// end of line 2, goto line 3
+				lcd_set_dram_addr(lcd, LINE3_START);
+				break;
+			case LINE3_START + LINE_LENGTH:
+				// end of line 3, goto line 4
+				lcd_set_dram_addr(lcd, LINE4_START);
+				break;
+			case LINE4_START + LINE_LENGTH:
+				// end of line 4, goto line 1
+				lcd_set_dram_addr(lcd, LINE1_START);
+				break;
+			default:
+				break;
+		}
+	} else {
+		// no automatic margins.
+		switch (lcd->pos) {
+			case LINE1_EOLPP:
+			case LINE2_EOLPP:
+			case LINE3_EOLPP:
+			case LINE4_EOLPP:
+			case LINE1_SOLMM:
+			case LINE2_SOLMM:
+			case LINE3_SOLMM:
+			case LINE4_SOLMM:
+				// stay put when am = false and we ran off a line
+				lcd_set_dram_addr(lcd, lcd->pos);
+				return;
+			default:
+				break;
+		}
+		switch (++lcd->pos) {
+			case LINE1_START + LINE_LENGTH:
+				// end of line 1, pin to eol
+				lcd_set_dram_addr(lcd, LINE1_EOLPP);
+				break;
+			case LINE2_START + LINE_LENGTH:
+				// end of line 2, pin to eol
+				lcd_set_dram_addr(lcd, LINE2_EOLPP);
+				break;
+			case LINE3_START + LINE_LENGTH:
+				// end of line 3, pin to eol
+				lcd_set_dram_addr(lcd, LINE3_EOLPP);
+				break;
+			case LINE4_START + LINE_LENGTH:
+				// end of line 4, pin to eol
+				lcd_set_dram_addr(lcd, LINE4_EOLPP);
+				break;
+			default:
+				break;
+		}
 	}
 }
 
 static void lcd_dec_pos(struct lcd_t *lcd)
 {
-	switch (--lcd->pos) {
-		case LINE1_START - 1:
-			// start of line 1, goto line 4
-			lcd_set_dram_addr(lcd, LINE4_START + LINE_LENGTH - 1);
-			break;
-
-		case LINE2_START - 1:
-			// start of line 2, goto line 1
-			lcd_set_dram_addr(lcd, LINE1_START + LINE_LENGTH - 1);
-			break;
-
-		case LINE3_START - 1:
-			// start of line 3, goto line 2
-			lcd_set_dram_addr(lcd, LINE2_START + LINE_LENGTH - 1);
-			break;
-
-		case LINE4_START - 1:
-			// start of line 4, goto line 3
-			lcd_set_dram_addr(lcd, LINE3_START + LINE_LENGTH - 1);
-			break;
-
-		default:
-			break;
+	if (lcd->am) {
+		switch (--lcd->pos) {
+			case LINE1_START - 1:
+				// start of line 1, goto line 4
+				lcd_set_dram_addr(lcd, LINE4_START + LINE_LENGTH - 1);
+				break;
+			case LINE2_START - 1:
+				// start of line 2, goto line 1
+				lcd_set_dram_addr(lcd, LINE1_START + LINE_LENGTH - 1);
+				break;
+			case LINE3_START - 1:
+				// start of line 3, goto line 2
+				lcd_set_dram_addr(lcd, LINE2_START + LINE_LENGTH - 1);
+				break;
+			case LINE4_START - 1:
+				// start of line 4, goto line 3
+				lcd_set_dram_addr(lcd, LINE3_START + LINE_LENGTH - 1);
+				break;
+			default:
+				break;
+		}
+	} else {
+		// no automatic margins.
+		switch (lcd->pos) {
+			case LINE1_EOLPP:
+			case LINE2_EOLPP:
+			case LINE3_EOLPP:
+			case LINE4_EOLPP:
+			case LINE1_SOLMM:
+			case LINE2_SOLMM:
+			case LINE3_SOLMM:
+			case LINE4_SOLMM:
+				// stay put when am = false and we ran off a line
+				lcd_set_dram_addr(lcd, lcd->pos);
+				return;
+			default:
+				break;
+		}
+		switch (--lcd->pos) {
+			case LINE1_START - 1:
+				// start of line 1, pin to sol
+				lcd_set_dram_addr(lcd, LINE1_SOLMM);
+				break;
+			case LINE2_START - 1:
+				// start of line 2, pin to sol
+				lcd_set_dram_addr(lcd, LINE2_SOLMM);
+				break;
+			case LINE3_START - 1:
+				// start of line 3, pin to sol
+				lcd_set_dram_addr(lcd, LINE3_SOLMM);
+				break;
+			case LINE4_START - 1:
+				// start of line 4, pin to sol
+				lcd_set_dram_addr(lcd, LINE4_SOLMM);
+				break;
+			default:
+				break;
+		}
 	}
 }
 
 #define LINE_MASK (LINE1_START | LINE2_START | LINE3_START | LINE4_START)
 void lcd_getxy(struct lcd_t *lcd, int *x, int *y)
 {
+	bool am = lcd->am;
+
+	lcd_set_am(lcd, true);
 	*x = lcd->pos & 0x0f;
 	switch (lcd->pos & LINE_MASK) {
 		case LINE1_START:
@@ -543,6 +667,7 @@ void lcd_getxy(struct lcd_t *lcd, int *x, int *y)
 			*y = 0;
 			break;
 	}
+	lcd_set_am(lcd, am);
 }
 
 enum whence_t {WHENCE_ABS, WHENCE_REL};
@@ -550,6 +675,7 @@ int lcd_gotoxy(struct lcd_t *lcd, int x, int y, enum whence_t whence)
 {
 	int r = 0;
 	int dp;
+	bool am = lcd->am;
 
 	switch (whence) {
 		case WHENCE_ABS:
@@ -563,12 +689,16 @@ int lcd_gotoxy(struct lcd_t *lcd, int x, int y, enum whence_t whence)
 			// x,y are not bounds check on relative moves (they just wrap)
 			dp = y * LINE_LENGTH + x;
 			if (dp < 0) {
+				lcd_set_am(lcd, true);
 				while (dp++ != 0)
 					lcd_dec_pos(lcd);
+				lcd_set_am(lcd, am);
 			}
 			else if (dp > 0) {
+				lcd_set_am(lcd, true);
 				while (dp-- != 0)
 					lcd_inc_pos(lcd);
+				lcd_set_am(lcd, am);
 			}
 			break;
 	}
@@ -763,6 +893,14 @@ ssize_t lcd_write(struct file *filp, const char __user *buf, size_t count, loff_
 					case 'C':
 						// move right 1
 						lcd_gotoxy(&lcd, 1, 0, WHENCE_REL);
+						lcd.wstate = WRITE_STATE_NORMAL;
+						break;
+					case 'm':
+						lcd_set_am(&lcd, true);
+						lcd.wstate = WRITE_STATE_NORMAL;
+						break;
+					case 'M':
+						lcd_set_am(&lcd, false);
 						lcd.wstate = WRITE_STATE_NORMAL;
 						break;
 					default:
