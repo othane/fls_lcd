@@ -13,11 +13,25 @@
 
 #define MODULE_NAME "FLS front panel LCD"
 
-#define LCD_SPLASH_MSG "                 SPLASH  SCREEN "
+#ifdef MODULE
+#define LCD_SPLASH_MSG ""
+#else
+#define LCD_SPLASH_MSG "\eJ                 SPLASH  SCREEN "
+#endif
+
+#define LCD_HW_RESET 1
 
 static int major = 0;		/* default to dynamic major */
-module_param(major, int, 0);
+module_param(major, int, S_IRUGO);
 MODULE_PARM_DESC(major, "Major device number");
+
+static int hw_reset = LCD_HW_RESET;
+module_param(hw_reset, int, S_IRUGO);
+MODULE_PARM_DESC(hw_reset, "reset the lcd on init, or assume it is already configured");
+
+static char *splash_msg = LCD_SPLASH_MSG;
+module_param(splash_msg, charp, S_IRUGO);
+MODULE_PARM_DESC(splash_msg, "The message to display on the LCD when the module loads");
 
 // hw layout
 #define SYSCON_BASE (0x80004000)
@@ -129,8 +143,6 @@ static struct lcd_t {
 	.wstate = WRITE_STATE_NORMAL,
 	.am = true,
 };
-
-static struct cdev cdev;
 
 static void dio_set(struct dio_t *dio, unsigned int set_mask, unsigned int clear_mask)
 {
@@ -715,18 +727,6 @@ static void lcd_putchar(struct lcd_t *lcd, char c)
 	lcd_inc_pos(lcd);
 }
 
-static void lcd_puts(struct lcd_t *lcd, const char *s)
-{
-	int k;
-
-	// for security we limit this to LINE_LENGTH (overflows)
-	for (k = 0; k < LINE_LENGTH * 4; k++, s++) {
-		if (*s == 0)
-			break;
-		lcd_putchar(lcd, *s);
-	}
-}
-
 static void lcd_4bit_init(struct lcd_t *lcd, enum lcd_lines lines, enum lcd_font font)
 {
 	// power on
@@ -776,36 +776,17 @@ loff_t lcd_llseek(struct file *filp, loff_t off, int whence)
 	return lcd.pos;
 }
 
-ssize_t lcd_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
+ssize_t lcd_print(const char *buf, size_t count)
 {
-	int ret = 0;
-	char *_buf = NULL;
 	size_t l;
 	int x, y;
 
-	// buffer the user data local so we loop through
-	// without needing to be able to sleep
-	_buf = kmalloc(count, GFP_KERNEL);
-	if (!_buf) {
-		printk(KERN_ERR "unable to alloc write buffer\n");
-		ret = -ENOMEM;
-		goto exit;
-	}
-	memset(_buf, 0, count);
-	if (copy_from_user(_buf, buf, count)) {
-		// do not support partial writes (this might cause the lcd to flicker for one)
-		printk(KERN_ERR "bad write buffer, write rejected\n");
-		ret = -EFAULT;
-		goto exit;
-	}
-
-	// process buffer
-	for (l = 0; l < count && _buf[l] != 0; l++)
+	for (l = 0; l < count && buf[l] != 0; l++)
 	{
 		switch (lcd.wstate)
 		{
 			case WRITE_STATE_NORMAL:
-				switch(_buf[l])
+				switch(buf[l])
 				{
 					case 0x1b:
 						// escape char mode !
@@ -835,13 +816,13 @@ ssize_t lcd_write(struct file *filp, const char __user *buf, size_t count, loff_
 						break;
 					default:
 						// normal characters
-						lcd_putchar(&lcd, _buf[l]);
+						lcd_putchar(&lcd, buf[l]);
 						break;
 				}
 				break;
 
 			case WRITE_STATE_ESCAPE1:
-				switch(_buf[l])
+				switch(buf[l])
 				{
 					case 'a':
 						// all attributes off (blink = 0)
@@ -905,13 +886,40 @@ ssize_t lcd_write(struct file *filp, const char __user *buf, size_t count, loff_
 						break;
 					default:
 						// unknown escape code (just dump the output)
-						printk(KERN_WARNING "unknown escape code %.2x\n", _buf[l]);
+						printk(KERN_WARNING "unknown escape code %.2x\n", buf[l]);
 						lcd.wstate = WRITE_STATE_NORMAL;
 						break;
 				}
 				break;
 		}
 	}
+
+	return l;
+}
+
+ssize_t lcd_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
+{
+	int ret = 0;
+	char *_buf = NULL;
+
+	// buffer the user data local so we loop through
+	// without needing to be able to sleep
+	_buf = kmalloc(count, GFP_KERNEL);
+	if (!_buf) {
+		printk(KERN_ERR "unable to alloc write buffer\n");
+		ret = -ENOMEM;
+		goto exit;
+	}
+	memset(_buf, 0, count);
+	if (copy_from_user(_buf, buf, count)) {
+		// do not support partial writes (this might cause the lcd to flicker for one)
+		printk(KERN_ERR "bad write buffer, write rejected\n");
+		ret = -EFAULT;
+		goto exit;
+	}
+
+	// process buffer
+	lcd_print(_buf, count);
 	*f_pos = lcd.pos;
 
 	// success
@@ -941,6 +949,7 @@ int lcd_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
+#ifdef MODULE
 static struct file_operations fops = {
 	.owner = THIS_MODULE,
 	.write = lcd_write,
@@ -951,11 +960,16 @@ static struct file_operations fops = {
 
 static struct class *cl;
 
+static struct cdev cdev;
+#endif
+
 int lcd_init(void)
 {
 	int ret = 0;
+#ifdef MODULE
 	dev_t devno;
 	struct device *device;
+#endif
 
 	// start up msg
 	printk(KERN_INFO "FLS LCD driver started\n");
@@ -970,18 +984,25 @@ int lcd_init(void)
 	// set RS, RW, and E as lo outputs (these remain outputs throughout lcd operation)
 	dio_set(lcd.dio, 0, (RS | RW | E));
 
-	// do 4 bit init sequence (see datasheet, p16)
-	// we cannot change the number of lines or font after this (see datasheet, p16)
-	lcd_4bit_init(&lcd, lcd_lines_2, lcd_font_5by8);
+	// lcd hw reset (you can choose not to do this if for example this is compiled
+	// into the kernel to get a early splash screen, then you want to load the module
+	// later knowing the in kernel module already did the init)
+	if (hw_reset) {
+		// do 4 bit init sequence (see datasheet, p16)
+		// we cannot change the number of lines or font after this (see datasheet, p16)
+		lcd_4bit_init(&lcd, lcd_lines_2, lcd_font_5by8);
 
-	// now do our init
-	lcd_clear(&lcd);
-	lcd_home(&lcd);
-	lcd_display_control(&lcd, lcd_display_on, lcd_cursor_off, lcd_blink_off);
+		// now do our init
+		lcd_clear(&lcd);
+		lcd_home(&lcd);
+		lcd_display_control(&lcd, lcd_display_on, lcd_cursor_off, lcd_blink_off);
+	}
 
 	// show initial splash screen
-	lcd_puts(&lcd, LCD_SPLASH_MSG);
+	if (strlen(splash_msg) > 0)
+		lcd_print(splash_msg, strlen(splash_msg));
 
+#ifdef MODULE
 	// allocate a new dev number (this can be dynamic or
 	// static if passed in as a module param)
 	if (major) {
@@ -1020,13 +1041,16 @@ int lcd_init(void)
 	}
 
 	return 0;
+#endif
 
+#ifdef MODULE
 fail3:
 	cdev_del(&cdev);
 fail2:
 	class_destroy(cl);
 fail1:
 	unregister_chrdev_region(devno, 1);
+#endif
 fail:
 	// deinit registers etc
 	dio_deinit(lcd.dio);
@@ -1035,11 +1059,13 @@ fail:
 
 void lcd_cleanup(void)
 {
+#ifdef MODULE
 	// clean up device node
 	device_destroy(cl, MKDEV(major, 0));
 	cdev_del(&cdev);
 	class_destroy(cl);
 	unregister_chrdev_region(MKDEV(major, 0), 1);
+#endif
 
 	// deinit registers etc
 	dio_deinit(lcd.dio);
