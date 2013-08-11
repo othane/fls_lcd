@@ -4,7 +4,7 @@
  obj-y				+= eeprom/
  obj-$(CONFIG_WL127X_RFKILL)	+= wl127x-rfkill.o
  obj-$(CONFIG_SD8XXX_RFKILL)	+= sd8x_rfkill.o
-+obj-$(CONFIG_FLS_LCD)		+= fls_lcd.o
++obj-$(CONFIG_FLS_LCD)		+= fls_lcd_ik.o
 --- a/drivers/misc/Kconfig
 +++ b/drivers/misc/Kconfig
 @@ -255,6 +255,13 @@
