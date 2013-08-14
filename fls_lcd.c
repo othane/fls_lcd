@@ -43,6 +43,7 @@ MODULE_PARM_DESC(splash_msg, "The message to display on the LCD when the module 
 #define D5	(1 << 1)
 #define D6	(1 << 4)
 #define D7	(1 << 5)
+#define PWR	(1 << 9)
 
 // mapping for dram address to position on screen
 #define LINE_LENGTH (0x10)
@@ -373,6 +374,17 @@ static uint8_t lcd_read8(struct lcd_t *lcd, uint8_t rs)
 	db |= (lcd_read4(lcd, rs) >> 0) & 0xf0;
 	db |= (lcd_read4(lcd, rs) >> 4) & 0x0f;
 	return db;
+}
+
+static void lcd_power_cycle(struct lcd_t *lcd)
+{
+	// ensure power is off for enough time for the lcd to power down
+	dio_set(lcd->dio, 0, PWR);
+	mdelay(Tpor0);
+
+	// power on 
+	dio_set(lcd->dio, PWR, 0);
+	mdelay(Tpor0);
 }
 
 static enum lcd_busy_state lcd_is_busy(struct lcd_t *lcd, uint8_t *addr)
