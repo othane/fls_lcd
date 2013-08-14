@@ -765,7 +765,11 @@ static void lcd_4bit_init(struct lcd_t *lcd, enum lcd_lines lines, enum lcd_font
 	// http://www.piclist.com/techref/postbot.asp?by=thread&id=HD44780+LCD+and+4-bit+mode+using+16F84&w=body&tgt=post)
 	lcd_write4(lcd, 0, 0x20);
 	udelay(Tpor4);
-	lcd_function_set(lcd, lines, font);
+	
+	// set initial startup settings recommended in the datasheet
+	lcd_function_set(lcd, lcd_lines_2, lcd_font_5by8);
+	lcd_display_control(lcd, lcd_display_off, lcd_cursor_off, lcd_blink_off); // turn everything off
+	lcd_entry_mode(lcd, lcd_id_right, lcd_sh_off);
 }
 
 loff_t lcd_llseek(struct file *filp, loff_t off, int whence)
@@ -1000,21 +1004,15 @@ int lcd_init(void)
 		goto fail;
 	}
 
-	// if we are doing a hw reset then power cycle the lcd before we do anything
-	// this will cause the lcd to completely reset and loose all state info
-	if (hw_reset)
-		lcd_power_cycle(&lcd);
-	
-	// do 4 bit init sequence (see datasheet, p16)
-	// this ensures we get in sync with the lcd so we should always do it before trying
-	// to talk to the lcd
-	lcd_4bit_init(&lcd, lcd_lines_2, lcd_font_5by8);
-
-	// if we lost all state info owing to a hw_reset above then we need to re-init the screen
+	// if hw_reset then we need to power cycle if we can and then resync via 
+	// a 4 bit init, then reset-up the screen settings the way we want them
 	if (hw_reset) {
-		// set initial startup settings recommended in the datasheet
-		lcd_display_control(&lcd, lcd_display_off, lcd_cursor_off, lcd_blink_off); // turn everything off
-		lcd_entry_mode(&lcd, lcd_id_right, lcd_sh_off);
+		// set power switch lo so the lcd looses power, then hi again until it turns on
+		lcd_power_cycle(&lcd);
+
+		// do 4 bit init sequence (see datasheet, p16)
+		// this ensures we get in sync with the lcd
+		lcd_4bit_init(&lcd, lcd_lines_2, lcd_font_5by8);
 
 		// now do our init
 		lcd_clear(&lcd);
