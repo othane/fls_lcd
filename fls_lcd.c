@@ -53,8 +53,11 @@ MODULE_PARM_DESC(splash_msg, "The message to display on the LCD when the module 
 #define LINE4_START (0x50)
 
 // timings from datasheet (plus tm to add a little margin so we are safe)
-#define Tpor0     (50)
-#define Tpor1     (5)
+#define Tpor0     (50) // ms delay
+#define Tpor1     (5)  // ms delay
+#define Tpor2     (200)
+#define Tpor3     (200)
+#define Tpor4     (200)
 #define Tc        (500)
 #define Tpw       (230)
 #define Tr        (20)
@@ -749,24 +752,20 @@ static void lcd_putchar(struct lcd_t *lcd, char c)
 
 static void lcd_4bit_init(struct lcd_t *lcd, enum lcd_lines lines, enum lcd_font font)
 {
-	// power on
-	///@todo turn the power switch on when available
-	mdelay(Tpor0);
-
-	// clear all pins on power up and let lcd boot
-	// note datasheet says set db to 0x30 but working 
-	// example code uses 0x00 so I will follow that (seems
-	// to work)
-	dio_set(lcd->dio, 0, RS | RW | E | D7 | D6 | D5 | D4);
+	// force us into 8 bit mode (just to get to a known sync point)
+	lcd_write4(lcd, 0, 0x30);
 	mdelay(Tpor1);
+	lcd_write4(lcd, 0, 0x30);
+	udelay(Tpor2);
+	lcd_write4(lcd, 0, 0x30);
+	udelay(Tpor3);
 
-	// set 4 bit mode
+	// goto 4 bit mode (setting the number of lines and font)
+	// note we are only able to run this function set at this stage and never again (see datasheet p16, and
+	// http://www.piclist.com/techref/postbot.asp?by=thread&id=HD44780+LCD+and+4-bit+mode+using+16F84&w=body&tgt=post)
 	lcd_write4(lcd, 0, 0x20);
-	lcd_busy_wait(lcd);
-
-	// set initial startup settings recommended in the datasheet
-	lcd_display_control(lcd, lcd_display_off, lcd_cursor_off, lcd_blink_off); // turn everything off
-	lcd_function_set(lcd, lines, font); // these can only be set after power on (see datasheet p16)
+	udelay(Tpor4);
+	lcd_function_set(lcd, lines, font);
 }
 
 loff_t lcd_llseek(struct file *filp, loff_t off, int whence)
@@ -1001,21 +1000,29 @@ int lcd_init(void)
 		goto fail;
 	}
 
-	// set RS, RW, and E as lo outputs (these remain outputs throughout lcd operation)
-	dio_set(lcd.dio, 0, (RS | RW | E));
+	// if we are doing a hw reset then power cycle the lcd before we do anything
+	// this will cause the lcd to completely reset and loose all state info
+	if (hw_reset)
+		lcd_power_cycle(&lcd);
+	
+	// do 4 bit init sequence (see datasheet, p16)
+	// this ensures we get in sync with the lcd so we should always do it before trying
+	// to talk to the lcd
+	lcd_4bit_init(&lcd, lcd_lines_2, lcd_font_5by8);
 
-	// lcd hw reset (you can choose not to do this if for example this is compiled
-	// into the kernel to get a early splash screen, then you want to load the module
-	// later knowing the in kernel module already did the init)
+	// if we lost all state info owing to a hw_reset above then we need to re-init the screen
 	if (hw_reset) {
-		// do 4 bit init sequence (see datasheet, p16)
-		// we cannot change the number of lines or font after this (see datasheet, p16)
-		lcd_4bit_init(&lcd, lcd_lines_2, lcd_font_5by8);
+		// set initial startup settings recommended in the datasheet
+		lcd_display_control(&lcd, lcd_display_off, lcd_cursor_off, lcd_blink_off); // turn everything off
+		lcd_entry_mode(&lcd, lcd_id_right, lcd_sh_off);
 
 		// now do our init
 		lcd_clear(&lcd);
 		lcd_home(&lcd);
 		lcd_display_control(&lcd, lcd_display_on, lcd_cursor_off, lcd_blink_off);
+	} else {
+		// just home the cursor if we are not doing a full reset, this way at least we know where we are
+		lcd_home(&lcd);
 	}
 
 	// show initial splash screen
