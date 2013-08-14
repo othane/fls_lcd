@@ -156,17 +156,21 @@ static void dio_set(struct dio_t *dio, unsigned int set_mask, unsigned int clear
 
 	// set and clear output state
 	out = ioread16(dio->out.vaddr);
+	mb();
 	out |= set_mask;
 	out &= ~clear_mask;
 	iowrite16(out, dio->out.vaddr);
+	mb();
 
 	// ensure these pins are outputs (if already inputs they will
 	// all switch together, if some were inputs and some where
 	// outputs there might be a slight glitch between some pins
 	// and if all were outputs this step does nothing effectively
 	dir = ioread16(dio->dir.vaddr);
+	mb();
 	dir |= output_mask; // 1 = output, 0 = input
 	iowrite16(dir, dio->dir.vaddr);
+	mb();
 
 	local_irq_restore(flags);
 }
@@ -182,11 +186,14 @@ static unsigned int dio_get(struct dio_t *dio, unsigned int get_mask)
 
 	// ensure these pins are inputs
 	dir = ioread16(dio->dir.vaddr);
+	mb();
 	dir &= ~get_mask; // 1 = output, 0 = input
 	iowrite16(dir, dio->dir.vaddr);
+	mb();
 
 	// set and clear output state
 	in = ioread16(dio->in.vaddr);
+	mb();
 	in &= get_mask;
 	
 	local_irq_restore(flags);
