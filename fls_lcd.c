@@ -1101,8 +1101,16 @@ void lcd_cleanup(void)
 
 #ifdef MODULE
 module_init(lcd_init);
-#else
+#else 
+
+// if we are not a module then load this driver asap
+// so the splash msg is shown quickly
+#ifndef DEVNODE
 early_initcall(lcd_init);
+#else
+pure_initcall(lcd_init);
+#endif
+
 #endif
 module_exit(lcd_cleanup);
 
