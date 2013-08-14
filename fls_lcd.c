@@ -14,6 +14,7 @@
 #define MODULE_NAME "FLS front panel LCD"
 
 #ifdef MODULE
+#define DEVNODE
 #define LCD_SPLASH_MSG ""
 #else
 #define LCD_SPLASH_MSG "\eJ                 SPLASH  SCREEN "
@@ -956,7 +957,7 @@ int lcd_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-#ifdef MODULE
+#ifdef DEVNODE
 static struct file_operations fops = {
 	.owner = THIS_MODULE,
 	.write = lcd_write,
@@ -973,7 +974,7 @@ static struct cdev cdev;
 int lcd_init(void)
 {
 	int ret = 0;
-#ifdef MODULE
+#ifdef DEVNODE
 	dev_t devno;
 	struct device *device;
 #endif
@@ -1009,7 +1010,7 @@ int lcd_init(void)
 	if (strlen(splash_msg) > 0)
 		lcd_print(splash_msg, strlen(splash_msg));
 
-#ifdef MODULE
+#ifdef DEVNODE
 	// allocate a new dev number (this can be dynamic or
 	// static if passed in as a module param)
 	if (major) {
@@ -1050,7 +1051,7 @@ int lcd_init(void)
 	return 0;
 #endif
 
-#ifdef MODULE
+#ifdef DEVNODE
 fail3:
 	cdev_del(&cdev);
 fail2:
@@ -1066,7 +1067,7 @@ fail:
 
 void lcd_cleanup(void)
 {
-#ifdef MODULE
+#ifdef DEVNODE
 	// clean up device node
 	device_destroy(cl, MKDEV(major, 0));
 	cdev_del(&cdev);
