@@ -868,6 +868,12 @@ ssize_t lcd_print(const char *buf, size_t count)
 						lcd_cursor(&lcd, 0);
 						lcd.wstate = WRITE_STATE_NORMAL;
 						break;
+					case 'h':
+						// cursor high visible (cursor with block blink)
+						lcd_blink(&lcd, 1);
+						lcd_cursor(&lcd, 1);
+						lcd.wstate = WRITE_STATE_NORMAL;
+						break;
 					case 'H':
 						// home cursor wtf does this mean (0,0 or sol)?
 						lcd_gotoxy(&lcd, 0, 0, WHENCE_ABS);
