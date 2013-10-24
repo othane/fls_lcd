@@ -742,12 +742,44 @@ int lcd_gotoxy(struct lcd_t *lcd, int x, int y, enum whence_t whence)
 	return r;
 }
 
+static char lcd_read_data(struct lcd_t *lcd, int addr)
+{
+	int ipos = lcd->pos;
+	char c;
+	
+	lcd_set_dram_addr(lcd, addr);
+	lcd_busy_wait(lcd);
+	c = (char)lcd_read8(lcd, 1);
+	lcd_set_dram_addr(lcd, ipos); // restore position when we entered
+
+	return c;
+}
+
 static void lcd_putchar(struct lcd_t *lcd, char c)
 {
-	// wait for the lcd to be ready before sending the command
-	lcd_busy_wait(lcd);
-	lcd_write8(lcd, 1, c);
-	lcd_inc_pos(lcd);
+	int ipos = lcd->pos;
+	char rc;
+	int retries = 5;
+
+	while (--retries) {
+		// wait for the lcd to be ready before sending the command
+		lcd_busy_wait(lcd);
+		lcd_write8(lcd, 1, c);
+		lcd_inc_pos(lcd);
+		
+		// check we wrote c to the screen (this is for debugging a
+		// problem where the lcd goes bananas)
+		rc = lcd_read_data(lcd, ipos);
+		if (rc == c)
+			return;
+
+		// We failed to put the char we wanted, presumably this is the 
+		// nibble offset bug, so lets try to get back in sync
+		printk(KERN_ERR "[ERR] wrote 0x%.2x and read 0x%.2x\n", c, rc);
+		lcd_write4(lcd, 1, 0); // hopefully this get the nibbles back in sync
+		lcd_set_dram_addr(lcd, ipos);
+		lcd_busy_wait(lcd);
+	}
 }
 
 static void lcd_4bit_init(struct lcd_t *lcd, enum lcd_lines lines, enum lcd_font font)
