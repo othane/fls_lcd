@@ -893,17 +893,19 @@ ssize_t lcd_print(const char *buf, size_t count)
 					case 'v':
 						// cursor visible
 						lcd_cursor(&lcd, 1);
+						lcd_blink(&lcd, 0);
 						lcd.wstate = WRITE_STATE_NORMAL;
 						break;
 					case 'V':
 						// cursor invisible
 						lcd_cursor(&lcd, 0);
+						lcd_blink(&lcd, 0);
 						lcd.wstate = WRITE_STATE_NORMAL;
 						break;
 					case 'h':
 						// cursor high visible (cursor with block blink)
 						lcd_blink(&lcd, 1);
-						lcd_cursor(&lcd, 1);
+						lcd_cursor(&lcd, 0);
 						lcd.wstate = WRITE_STATE_NORMAL;
 						break;
 					case 'H':
