@@ -777,7 +777,10 @@ static void lcd_putchar(struct lcd_t *lcd, char c)
 		// nibble offset bug, so lets try to get back in sync
 		printk(KERN_ERR "[ERR] wrote 0x%.2x and read 0x%.2x\n", c, rc);
 		lcd_write4(lcd, 1, 0); // hopefully this get the nibbles back in sync
+		// Reinitializing to return to a known state after corruption
 		lcd_set_dram_addr(lcd, ipos);
+		lcd_display_control(lcd, lcd->display_state, lcd->cursor_state, lcd->blink_state);
+		lcd_set_am(lcd, lcd->am);
 		lcd_busy_wait(lcd);
 	}
 }
