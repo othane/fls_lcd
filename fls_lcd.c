@@ -134,6 +134,8 @@ enum write_state {
 	WRITE_STATE_ESCAPE1
 };
 
+static atomic_t corrupt = ATOMIC_INIT(0);
+
 static struct lcd_t {
 	struct dio_t *dio;
 	int pos;
@@ -774,8 +776,13 @@ static void lcd_putchar(struct lcd_t *lcd, char c)
 			return;
 
 		// We failed to put the char we wanted, presumably this is the 
-		// nibble offset bug, so lets try to get back in sync
-		printk(KERN_ERR "[ERR] wrote 0x%.2x and read 0x%.2x\n", c, rc);
+		// nibble offset bug, so lets try to get back in sync, we also
+		// set the corrupt bit to let the sysfs know our lcd may need 
+		// redrawing (and emit a syslog error if this is the first 
+		// warning so we don't spam the logs)
+		if (!atomic_read(&corrupt)) // this is just a error message so the atomic race is not important here
+			printk(KERN_ERR "[ERR] wrote 0x%.2x and read 0x%.2x\n", c, rc);
+		atomic_set(&corrupt, 1);
 		lcd_write4(lcd, 1, 0); // hopefully this get the nibbles back in sync
 		// Reinitializing to return to a known state after corruption
 		lcd_set_dram_addr(lcd, ipos);
@@ -963,6 +970,32 @@ ssize_t lcd_print(const char *buf, size_t count)
 	return l;
 }
 
+ssize_t show_attr_corrupt(struct device *dev, struct device_attribute * attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", atomic_read(&corrupt));
+}
+
+ssize_t store_attr_corrupt(struct device *dev, struct device_attribute * attr, const char *buf, size_t count)
+{
+	int _corrupt;
+
+	sscanf(buf, "%d", &_corrupt);
+	atomic_set(&corrupt, _corrupt);
+
+	return count;
+}
+
+static DEVICE_ATTR(corrupt, S_IWUGO | S_IRUGO, show_attr_corrupt, store_attr_corrupt);
+
+static struct attribute *dev_attrs[] = {
+	&dev_attr_corrupt.attr,
+	NULL
+};
+
+static struct attribute_group dev_attr_grp = {
+	.attrs = dev_attrs,
+};
+
 ssize_t lcd_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
 {
 	int ret = 0;
@@ -1024,9 +1057,12 @@ static struct file_operations fops = {
 	.release = lcd_release,
 };
 
+#ifdef DEVNODE
 static struct class *cl;
-
+static struct device *dev;
 static struct cdev cdev;
+#endif
+
 #endif
 
 int lcd_init(void)
@@ -1034,7 +1070,6 @@ int lcd_init(void)
 	int ret = 0;
 #ifdef DEVNODE
 	dev_t devno;
-	struct device *device;
 #endif
 
 	// start up msg
@@ -1102,16 +1137,25 @@ int lcd_init(void)
 	}
 
 	// create /sys/lcd/fplcd/dev so udev will add our device to /dev/fplcd
-	device = device_create(cl, NULL, devno, NULL, "lcd");
-	if (IS_ERR(device)) {
+	dev = device_create(cl, NULL, devno, NULL, "lcd");
+	if (IS_ERR(dev)) {
 		printk(KERN_ERR "device_create for fplcd failed\n");
 		goto fail3;
+	}
+
+	// add attributes node to sysfs
+	ret = sysfs_create_group(&dev->kobj, &dev_attr_grp);
+	if (ret) {
+		printk(KERN_ERR "sysfs_create_group failed with error code %d\n", ret);
+		goto fail4;
 	}
 
 	return 0;
 #endif
 
 #ifdef DEVNODE
+fail4:
+	device_destroy(cl, MKDEV(major, 0));
 fail3:
 	cdev_del(&cdev);
 fail2:
@@ -1129,6 +1173,7 @@ void lcd_cleanup(void)
 {
 #ifdef DEVNODE
 	// clean up device node
+	sysfs_remove_group(&dev->kobj, &dev_attr_grp);
 	device_destroy(cl, MKDEV(major, 0));
 	cdev_del(&cdev);
 	class_destroy(cl);
