@@ -134,6 +134,8 @@ enum write_state {
 	WRITE_STATE_ESCAPE1
 };
 
+static atomic_t corrupt = ATOMIC_INIT(0);
+
 static struct lcd_t {
 	struct dio_t *dio;
 	int pos;
@@ -742,12 +744,52 @@ int lcd_gotoxy(struct lcd_t *lcd, int x, int y, enum whence_t whence)
 	return r;
 }
 
+static char lcd_read_data(struct lcd_t *lcd, int addr)
+{
+	int ipos = lcd->pos;
+	char c;
+	
+	lcd_set_dram_addr(lcd, addr);
+	lcd_busy_wait(lcd);
+	c = (char)lcd_read8(lcd, 1);
+	lcd_set_dram_addr(lcd, ipos); // restore position when we entered
+
+	return c;
+}
+
 static void lcd_putchar(struct lcd_t *lcd, char c)
 {
-	// wait for the lcd to be ready before sending the command
-	lcd_busy_wait(lcd);
-	lcd_write8(lcd, 1, c);
-	lcd_inc_pos(lcd);
+	int ipos = lcd->pos;
+	char rc;
+	int retries = 5;
+
+	while (--retries) {
+		// wait for the lcd to be ready before sending the command
+		lcd_busy_wait(lcd);
+		lcd_write8(lcd, 1, c);
+		lcd_inc_pos(lcd);
+		
+		// check we wrote c to the screen (this is for debugging a
+		// problem where the lcd goes bananas)
+		rc = lcd_read_data(lcd, ipos);
+		if (rc == c)
+			return;
+
+		// We failed to put the char we wanted, presumably this is the 
+		// nibble offset bug, so lets try to get back in sync, we also
+		// set the corrupt bit to let the sysfs know our lcd may need 
+		// redrawing (and emit a syslog error if this is the first 
+		// warning so we don't spam the logs)
+		if (!atomic_read(&corrupt)) // this is just a error message so the atomic race is not important here
+			printk(KERN_ERR "[ERR] wrote 0x%.2x and read 0x%.2x\n", c, rc);
+		atomic_set(&corrupt, 1);
+		lcd_write4(lcd, 1, 0); // hopefully this get the nibbles back in sync
+		// Reinitializing to return to a known state after corruption
+		lcd_set_dram_addr(lcd, ipos);
+		lcd_display_control(lcd, lcd->display_state, lcd->cursor_state, lcd->blink_state);
+		lcd_set_am(lcd, lcd->am);
+		lcd_busy_wait(lcd);
+	}
 }
 
 static void lcd_4bit_init(struct lcd_t *lcd, enum lcd_lines lines, enum lcd_font font)
@@ -861,17 +903,19 @@ ssize_t lcd_print(const char *buf, size_t count)
 					case 'v':
 						// cursor visible
 						lcd_cursor(&lcd, 1);
+						lcd_blink(&lcd, 0);
 						lcd.wstate = WRITE_STATE_NORMAL;
 						break;
 					case 'V':
 						// cursor invisible
 						lcd_cursor(&lcd, 0);
+						lcd_blink(&lcd, 0);
 						lcd.wstate = WRITE_STATE_NORMAL;
 						break;
 					case 'h':
 						// cursor high visible (cursor with block blink)
 						lcd_blink(&lcd, 1);
-						lcd_cursor(&lcd, 1);
+						lcd_cursor(&lcd, 0);
 						lcd.wstate = WRITE_STATE_NORMAL;
 						break;
 					case 'H':
@@ -925,6 +969,32 @@ ssize_t lcd_print(const char *buf, size_t count)
 
 	return l;
 }
+
+ssize_t show_attr_corrupt(struct device *dev, struct device_attribute * attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", atomic_read(&corrupt));
+}
+
+ssize_t store_attr_corrupt(struct device *dev, struct device_attribute * attr, const char *buf, size_t count)
+{
+	int _corrupt;
+
+	sscanf(buf, "%d", &_corrupt);
+	atomic_set(&corrupt, _corrupt);
+
+	return count;
+}
+
+static DEVICE_ATTR(corrupt, S_IWUGO | S_IRUGO, show_attr_corrupt, store_attr_corrupt);
+
+static struct attribute *dev_attrs[] = {
+	&dev_attr_corrupt.attr,
+	NULL
+};
+
+static struct attribute_group dev_attr_grp = {
+	.attrs = dev_attrs,
+};
 
 ssize_t lcd_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
 {
@@ -987,9 +1057,12 @@ static struct file_operations fops = {
 	.release = lcd_release,
 };
 
+#ifdef DEVNODE
 static struct class *cl;
-
+static struct device *dev;
 static struct cdev cdev;
+#endif
+
 #endif
 
 int lcd_init(void)
@@ -997,7 +1070,6 @@ int lcd_init(void)
 	int ret = 0;
 #ifdef DEVNODE
 	dev_t devno;
-	struct device *device;
 #endif
 
 	// start up msg
@@ -1065,16 +1137,25 @@ int lcd_init(void)
 	}
 
 	// create /sys/lcd/fplcd/dev so udev will add our device to /dev/fplcd
-	device = device_create(cl, NULL, devno, NULL, "lcd");
-	if (IS_ERR(device)) {
+	dev = device_create(cl, NULL, devno, NULL, "lcd");
+	if (IS_ERR(dev)) {
 		printk(KERN_ERR "device_create for fplcd failed\n");
 		goto fail3;
+	}
+
+	// add attributes node to sysfs
+	ret = sysfs_create_group(&dev->kobj, &dev_attr_grp);
+	if (ret) {
+		printk(KERN_ERR "sysfs_create_group failed with error code %d\n", ret);
+		goto fail4;
 	}
 
 	return 0;
 #endif
 
 #ifdef DEVNODE
+fail4:
+	device_destroy(cl, MKDEV(major, 0));
 fail3:
 	cdev_del(&cdev);
 fail2:
@@ -1092,6 +1173,7 @@ void lcd_cleanup(void)
 {
 #ifdef DEVNODE
 	// clean up device node
+	sysfs_remove_group(&dev->kobj, &dev_attr_grp);
 	device_destroy(cl, MKDEV(major, 0));
 	cdev_del(&cdev);
 	class_destroy(cl);
