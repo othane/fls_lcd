@@ -135,6 +135,7 @@ enum write_state {
 };
 
 static atomic_t corrupt = ATOMIC_INIT(0);
+static atomic_t busy = ATOMIC_INIT(0);
 
 static struct lcd_t {
 	struct dio_t *dio;
@@ -404,16 +405,34 @@ static enum lcd_busy_state lcd_is_busy(struct lcd_t *lcd, uint8_t *addr)
 static int lcd_busy_wait(struct lcd_t *lcd)
 {
 	int t = 0;
-	while (t < 10000) { // wait up to 10ms max for lcd to be ready
+
+	// busy wait initially 
+	while (t < 1000) { // wait up to 1ms max for lcd to be ready by busy waiting (this keeps normal operation responsive)
 		if (lcd_is_busy(lcd, NULL) == lcd_idle)
-			return 0;
+			goto done;
 		udelay(500);
 		t += 500;
 	}
+
+	// if busy waiting fails then sleep
+	t = 0;
+	while (t < 2) { // wait up to 9ms max for lcd to be ready (for buggy connections or weird commands this keeps the os from dieing)
+		if (lcd_is_busy(lcd, NULL) == lcd_idle)
+			goto done;
+		msleep(5);
+		t++;
+	}
 	if (lcd_is_busy(lcd, NULL) == lcd_idle)
-		return 0;
-	printk(KERN_ERR "timed-out waiting for lcd to return from busy state\n");
+		goto done;
+
+	if (!atomic_read(&busy)) // this is just a error message so the atomic race is not important here
+		printk(KERN_ERR "timed-out waiting for lcd to return from busy state\n");
+	atomic_set(&busy, 1);
 	return -1;
+
+done:
+	atomic_set(&busy, 0);
+	return 0;
 }
 
 void lcd_display_control(struct lcd_t *lcd, enum lcd_display d, enum lcd_cursor c, enum lcd_blink b)
@@ -987,8 +1006,17 @@ ssize_t store_attr_corrupt(struct device *dev, struct device_attribute * attr, c
 
 static DEVICE_ATTR(corrupt, S_IWUGO | S_IRUGO, show_attr_corrupt, store_attr_corrupt);
 
+ssize_t show_attr_busy(struct device *dev, struct device_attribute * attr, char *buf)
+{
+	lcd_busy_wait(&lcd);
+	return scnprintf(buf, PAGE_SIZE, "%d\n", atomic_read(&busy));
+}
+
+static DEVICE_ATTR(busy, S_IRUGO, show_attr_busy, NULL);
+
 static struct attribute *dev_attrs[] = {
 	&dev_attr_corrupt.attr,
+	&dev_attr_busy.attr,
 	NULL
 };
 
